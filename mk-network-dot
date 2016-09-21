@@ -1,0 +1,131 @@
+#!/bin/sh
+
+topdir=$PWD
+workdir=$(mktemp -d networkXXXXXX)
+trap "cd $topdir; rm -rf $workdir" EXIT
+
+cd $workdir
+
+> nodes
+> edges
+> peers
+
+# Get a list of running instances and their associated
+# interfaces.
+virsh list --name | while read instance; do
+	[ "$instance" ] || continue
+
+	echo "$instance instance global" >> nodes
+
+	for dev in $(virsh dumpxml $instance |
+		xmllint --xpath '//interface/target/@dev' -); do
+		dev=${dev#dev=\"}
+		dev=${dev%\"}
+		echo "$instance $dev" >> edges
+	done
+done
+
+# Gather network device information from the global
+# namespace.
+sh $topdir/ns-get-devs global
+
+# Gather network device information for all of the
+# active namespaces.
+ip netns | while read ns; do
+	ip netns exec $ns sh $topdir/ns-get-devs $ns
+done
+
+# Get information about OVS ports
+> seen
+ovs-vsctl list-br |
+while read brdev; do
+	ovs-vsctl list-ports $brdev |
+	while read port; do
+		# Only handle interfaces that we haven't seen
+		# previously.
+		grep -q "$port" nodes && continue
+
+		porttype=$(ovs-vsctl get Interface $port type)
+		
+		if [ "$porttype" = patch ]; then
+			porttype=ovspatch
+			peer=$(ovs-vsctl get Interface $port options:peer)
+
+			if [ "$peer" ] && ! grep -q $peer seen; then
+				echo "$port $peer" >> edges
+			fi
+		elif [ "$porttype" = gre ] || [ "$porttype" = vxlan ]; then
+			porttype=ovstun
+			peer=$(ovs-vsctl get Interface $port options:remote_ip)
+			if [ "$peer" ]; then
+				echo "$port ${peer//\"/}" >> edges
+				echo "${peer//\"/} remote global" >> nodes
+			fi
+		fi
+
+		echo "$port $porttype global" >> nodes
+		echo $port >> seen
+	done
+done
+
+# Add edges for veth peer inferfaces.
+> seen
+while read dev ifindex peer_ifindex; do
+	peer_dev=$(awk -v peer=$peer_ifindex '$2 == peer {print $1}' peers)
+	grep -q $peer_dev seen && continue
+
+	echo "$dev $peer_dev" >> edges
+	echo $dev >> seen
+done < peers
+
+# Generates dot output.
+
+cat <<EOF
+graph network {
+	rankdir=LR
+EOF
+
+# Emit device nodes by namespace
+sort -k3,3 -k2,2 -k1,1 nodes | awk '
+	$3 != "global" && $3 != lastns {
+		if (lastns)
+			print "}"
+		printf "subgraph \"cluster_%s\" {\n", $3
+		printf "  label=\"%s\"\n", $3
+		lastns=$3
+	}
+
+	{
+		style="filled"
+		shape="oval"
+		color="grey50"
+	}
+
+	# Set node styles.
+	$2 == "instance"	{shape="box"; color="tomato"}
+	$2 == "ovsbridge"	{color="lightblue"}
+	$2 == "bridge"		{color="olivedrab"}
+	$2 == "veth"		{color="lightgrey"}
+	$2 == "ovspatch"	{shape="cds"; color="gold"}
+	$2 == "ovstun"		{shape="cds"; color="thistle"}
+	$2 == "remote"		{shape="box"; style="solid"; color="black"}
+
+	{
+		printf "\"%s\" [shape=%s,style=%s,color=%s]\n", $1, shape, style, color
+	}
+
+	END {
+		if (lastns != "global")
+			print "}"
+	}
+'
+
+# Emit all the edges.
+awk '
+	{printf "\"%s\" -- \"%s\"\n", $1, $2}
+' edges
+
+cat <<EOF
+}
+EOF
+

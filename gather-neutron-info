@@ -1,0 +1,71 @@
+#!/bin/bash
+#
+# This collects a variety of Neutron information from the perspective of the
+# current user and packages into an archive named "neutron-HOST-DATE.tar.gz" in
+# the current directory.
+
+cleanup () {
+	sed 1d | tr -d '\r'
+}
+
+while getopts 'l' ch; do
+	case $ch in
+		(l) include_logs=1;;
+	esac
+done
+shift $(( $OPTIND - 1 ))
+
+workdir=$(mktemp -d neutronXXXXXX)
+trap "cd $PWD; rm -rf $workdir" EXIT
+
+hostname=${HOSTNAME%%.*}
+datestamp=$(date +%Y-%m-%dT%H-%M-%S)
+output=neutron-${hostname}-${datestamp}
+startdir=$PWD
+
+(
+cd $workdir
+
+echo $OS_TENANT_NAME > tenant_name.txt
+hostname > hostname.txt
+date +%s > created.txt
+
+echo "+ Examining networks"
+neutron net-list > net-list.txt
+neutron net-list -Fid -fcsv --quote none | cleanup | tee networks.txt |
+while read net; do
+	echo "  + network $net"
+	neutron net-show $net > net-$net.txt
+done
+
+echo "+ Examining subnets"
+neutron subnet-list > subnet-list.txt
+neutron subnet-list -Fid -fcsv --quote none | cleanup | tee subnets.txt |
+while read subnet; do
+	echo "  + subnet $subnet"
+	neutron subnet-show $subnet > subnet-$subnet.txt
+done
+
+echo "+ Examining routers"
+neutron router-list > router-list.txt
+neutron router-list -Fid -fcsv --quote none | cleanup | tee routers.txt |
+while read router; do
+	echo "  + router $router"
+	neutron router-show $router > router-$router.txt
+	neutron router-port-list $router > router-$router-ports.txt
+done
+
+echo "+ Examining ports"
+neutron port-list > port-list.txt
+
+if [ "$include_logs" = 1 ]; then
+	echo "+ Including logs"
+	mkdir logs
+	cp /var/log/neutron/*.log logs/
+fi
+
+tar -cz -f $startdir/${output}.tar.gz --xform "s|^|$output/|" *
+)
+
+ls -l ${output}.tar.gz
+

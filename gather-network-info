@@ -1,0 +1,75 @@
+#!/bin/sh
+
+nsexec () {
+	local ns=$1
+	shift
+
+	if [ "$ns" = "global" ]; then
+		"$@"
+	else
+		ip netns exec $ns "$@"
+	fi
+}
+
+workdir=$(mktemp -d networkXXXXXX)
+trap "cd $PWD; rm -rf $workdir" EXIT
+
+hostname=${HOSTNAME%%.*}
+datestamp=$(date +%Y-%m-%dT%H-%M-%S)
+output=network-${hostname}-${datestamp}
+startdir=$PWD
+
+(
+
+cd $workdir
+
+hostname > hostname.txt
+date +%s > created.txt
+
+echo "+ gathering ovs information"
+ovs-vsctl show > ovs-vsctl-show.txt
+ovs-dpctl show > ovs-dpctl-show.txt
+ovs-vsctl list-br | tee ovs-bridges.txt |
+while read br; do
+	echo "  - device $br"
+	ovs-ofctl dump-flows $br > ovs-ofctl-dump-flows-$br.txt
+done
+
+(echo global; ip netns) |
+while read ns; do
+	echo "+ examing namespaces $ns" >&2
+        echo "ONE" 
+	interfaces=$(nsexec $ns ls /sys/class/net | grep -v lo)
+	if ! [ "$interfaces" ]; then
+		echo "  - skipping emtpy namespace" >&2
+		echo $ns >> namespace-inactive.txt
+		continue
+	else
+		echo $ns >> namespace-active.txt
+	fi
+        echo $ns/{interfadces,iptables,connections}
+	mkdir -p $ns/interfaces
+        mkdir -p $ns/iptables
+        mkdir -p $ns/connections
+
+	for interface in $interfaces; do
+		nsexec $ns ip addr show dev $interface > $ns/interfaces/$interface.txt
+	done
+
+	nsexec $ns ip route show > $ns/routes.txt
+	nsexec $ns iptables-save -t filter > $ns/iptables/filter.txt
+	nsexec $ns iptables-save -t nat > $ns/iptables/nat.txt
+	
+	if [ "$ns" != global ]; then
+		ip netns pids $ns | xargs -iPID ps -pPID -fh > $ns/processes.txt
+	fi
+
+	nsexec $ns netstat -tan | egrep -v 'TIME_WAIT' > $ns/connections/tcp.txt
+	nsexec $ns netstat -uan > $ns/connections/udp.txt
+done
+
+tar -cz -f $startdir/${output}.tar.gz --xform "s|^|$output/|" *
+)
+
+ls -l $startdir/${output}.tar.gz
+

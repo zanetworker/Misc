@@ -1,0 +1,7 @@
++ gathering ovs information
+  - device br-eth2
+  - device br-int
+hello I am here
+hello I am here
+hello I am here
+-rw-r--r-- 1 root root 2137 Sep  5 19:38 /home/sonata/visual/neutron-diag/network--2016-09-05T19-38-02.tar.gz

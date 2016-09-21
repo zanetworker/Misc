@@ -1,0 +1,16 @@
++---------------------------+--------------------------------------+
+| Field                     | Value                                |
++---------------------------+--------------------------------------+
+| admin_state_up            | True                                 |
+| id                        | 0d0a09c1-24e9-4ebc-9c22-163523cc062e |
+| mtu                       | 0                                    |
+| name                      | GATEWAY_NET                          |
+| provider:network_type     | vlan                                 |
+| provider:physical_network | physnet2                             |
+| provider:segmentation_id  | 50                                   |
+| router:external           | True                                 |
+| shared                    | True                                 |
+| status                    | ACTIVE                               |
+| subnets                   | bf4367d8-e547-4010-be6c-26fd5989fe47 |
+| tenant_id                 | 4c0cef53eb3141c3877a21fc86803f78     |
++---------------------------+--------------------------------------+
